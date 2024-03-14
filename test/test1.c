@@ -1,3 +1,3 @@
 int main(){
-  return -~!~!~!~!~0;
+  return  4 + 2 * !0 + 23;
 }

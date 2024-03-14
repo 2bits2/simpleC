@@ -23,14 +23,15 @@
   MACRO(TOK_UNKNOWN)                                                           \
   MACRO(TOK_EOF)
 
+#define FOREACH_EXPR_KIND(MACRO)                                               \
+  MACRO(EXPR_CONST)                                                            \
+  MACRO(EXPR_UNOP)                                                             \
+  MACRO(EXPR_BINOP)
+
 #define GENERATE_ENUM(ENUM) ENUM,
 #define GENERATE_STRING(STRING) #STRING,
 
-
-typedef enum {
-  FOREACH_TOKENKIND(GENERATE_ENUM)
-} TokenKind;
-
+typedef enum { FOREACH_TOKENKIND(GENERATE_ENUM) } TokenKind;
 
 typedef struct {
   char *data;
@@ -374,16 +375,23 @@ void lex(TokenBuffer * const tokens, LexBuffer *lexer, CharBuffer *charbuf){
 
 struct AstExpr;
 
+typedef struct AstBinop {
+  TokenKind kind;
+  struct AstExpr *left;
+  struct AstExpr *right;
+} AstBinop;
+
 typedef struct {
   TokenKind kind;
   struct AstExpr *expr;
 } AstUnOp;
 
 typedef struct AstExpr {
-  enum {EXPR_CONST, EXPR_UNOP} kind;
+  enum {FOREACH_EXPR_KIND(GENERATE_ENUM)} kind;
   union {
     int intliteral;
     AstUnOp unop;
+    AstBinop binop;
   };
 } AstExpr;
 
@@ -396,11 +404,39 @@ typedef struct {
   AstReturnStmt *stmt;
 } AstFunDef;
 
-typedef struct {
-  AstFunDef *fun;
-} AstProgram;
+void print_expr(AstExpr *expr, CharBuffer *buffer, int indent) {
+  if(expr == NULL){
+    printf("%*sexpression NULL \n", indent, "");
+    return;
+  }
+  static char *expr_names[] = {FOREACH_EXPR_KIND(GENERATE_STRING)};
+  static char *tok_names[] = {FOREACH_TOKENKIND(GENERATE_STRING)};
 
+  switch (expr->kind) {
+  case EXPR_CONST:
+    printf("%*sconst %d \n", indent, "", expr->intliteral);
+    break;
+  case EXPR_BINOP:
+    printf("%*sexpression %s \n", indent, "", tok_names[expr->binop.kind]);
+    print_expr(expr->binop.left, buffer, indent+2);
+    print_expr(expr->binop.right, buffer, indent+2);
+    break;
+  case EXPR_UNOP:
+    printf("%*sexpression %s \n", indent, "", tok_names[expr->unop.kind]);
+    print_expr(expr->unop.expr, buffer, indent+2);
+    //printf("%*unop %d \n", indent, "", expr->intliteral);
+    break;
+  }
+}
 
+void print_fundef(AstFunDef *fundef, CharBuffer *buffer, int indent) {
+  if(fundef == NULL){
+    printf("%*sfundef NULL \n", indent, "");
+    return;
+  }
+  printf("%*sfunction %.*s \n", indent, "", fundef->name.len, buffer->data + fundef->name.start);
+  print_expr(fundef->stmt->expr, buffer, indent+2);
+}
 
 
 int tokenbuffer_expect(TokenBuffer *tokens, TokenKind expected, const char *print){
@@ -419,7 +455,9 @@ int tokenbuffer_expect(TokenBuffer *tokens, TokenKind expected, const char *prin
   return 1;
 }
 
-AstExpr *parse_expr(TokenBuffer *tokens, CharBuffer *charbuf){
+AstExpr *parse_expr(TokenBuffer *tokens, CharBuffer *charbuf);
+
+AstExpr *parse_factor(TokenBuffer *tokens, CharBuffer *charbuf) {
   Token tok = tokenbuffer_peek(tokens);
   switch (tok.kind) {
   case TOK_BITCOMPLEMENT:
@@ -430,25 +468,99 @@ AstExpr *parse_expr(TokenBuffer *tokens, CharBuffer *charbuf){
     expr->unop.kind = tok.kind;
 
     tokenbuffer_next(tokens);
-    expr->unop.expr = parse_expr(tokens, charbuf);
+    expr->unop.expr = parse_factor(tokens, charbuf);
     return expr;
   }
   case TOK_LITERAL_INT: {
     AstExpr *expr = malloc(sizeof(AstExpr));
     expr->kind = EXPR_CONST;
     expr->intliteral = tok.literalint;
+    tokenbuffer_next(tokens);
     return expr;
     break;
   }
+  case TOK_PAREN_OPEN: {
+    tokenbuffer_next(tokens);
+    AstExpr *expr = parse_expr(tokens, charbuf);
+    if(expr == NULL){
+      fprintf(stderr, "%d:%d expected expression after (", tok.line, tok.col);
+      return NULL;
+    }
+    tok = tokenbuffer_next(tokens);
+    if(tok.kind != TOK_PAREN_CLOSE){
+      fprintf(stderr, "%d:%d expected closing paren ) after expression\n", tok.line, tok.col );
+      // TODO: free expr
+    }
+    return expr;
+    break;
+  }
+
   default:
     return NULL;
   }
 }
 
+AstExpr *parse_term(TokenBuffer *tokens, CharBuffer *charbuf) {
+  AstExpr *leftFactor = parse_factor(tokens, charbuf);
+  if (leftFactor == NULL) {
+    return NULL;
+  }
+
+  Token tok = tokenbuffer_peek(tokens);
+  while (tok.kind == TOK_MUL || tok.kind == TOK_DIV) {
+    tokenbuffer_next(tokens);
+    AstExpr *rightFactor = parse_factor(tokens, charbuf);
+    if (rightFactor == NULL) {
+      fprintf(stderr, "%d:%d expected right factor after * or / \n", tok.line,
+              tok.col);
+      // TODO: free leftFactor
+      return NULL;
+    }
+
+    AstExpr *factor = malloc(sizeof(AstExpr));
+    factor->kind = EXPR_BINOP;
+    factor->binop.kind = tok.kind;
+    factor->binop.left = leftFactor;
+    factor->binop.right = rightFactor;
+    leftFactor = factor;
+
+    tok = tokenbuffer_peek(tokens);
+  }
+
+  return leftFactor;
+}
+
+AstExpr *parse_expr(TokenBuffer *tokens, CharBuffer *charbuf) {
+  AstExpr *leftTerm = parse_term(tokens, charbuf);
+  if (leftTerm == NULL) {
+    return leftTerm;
+  }
+  Token tok = tokenbuffer_peek(tokens);
+  while (tok.kind == TOK_PLUS || tok.kind == TOK_MINUS) {
+    tokenbuffer_next(tokens);
+
+    AstExpr *rightTerm = parse_term(tokens, charbuf);
+    if (rightTerm == NULL) {
+      fprintf(stderr, "%d:%d expected right factor after * or / \n", tok.line,
+              tok.col);
+      // TODO: free rightTerm
+      return NULL;
+    }
+
+    AstExpr *term = malloc(sizeof(AstExpr));
+    term->kind = EXPR_BINOP;
+    term->binop.kind = tok.kind;
+    term->binop.left = leftTerm;
+    term->binop.right = rightTerm;
+    leftTerm = term;
+    tok = tokenbuffer_peek(tokens);
+  }
+  return leftTerm;
+}
 
 AstReturnStmt *parse_return_stmt(TokenBuffer *tokens, CharBuffer *charbuf) {
 
-  if(!tokenbuffer_expect(tokens, TOK_KEYWORD_RETURN, "return keyword")){
+  if (!tokenbuffer_expect(tokens, TOK_KEYWORD_RETURN, "return keyword")) {
     return NULL;
   }
 
@@ -457,33 +569,33 @@ AstReturnStmt *parse_return_stmt(TokenBuffer *tokens, CharBuffer *charbuf) {
   tokenbuffer_next(tokens);
 
   AstExpr *expr = parse_expr(tokens, charbuf);
-  if(!expr){
-    fprintf(stderr, "%d:%d: expected valid expression after return keyword", ret.line, ret.col);
+  if (!expr) {
+    fprintf(stderr, "%d:%d: expected valid expression after return keyword",
+            ret.line, ret.col);
     return NULL;
   }
 
-  tokenbuffer_next(tokens);
   if (!tokenbuffer_expect(tokens, TOK_SEMICOLON, "semicolon ; ")) {
     free(expr);
     return NULL;
   }
+  tokenbuffer_next(tokens);
+  //Token inttok = tokenbuffer_peek(tokens);
 
-  Token inttok = tokenbuffer_peek(tokens);
   AstReturnStmt *stmt = malloc(sizeof(AstReturnStmt));
   stmt->expr = expr;
   return stmt;
 }
 
-
-AstFunDef *parse_fun(TokenBuffer *tokens, CharBuffer *charbuf){
+AstFunDef *parse_fun(TokenBuffer *tokens, CharBuffer *charbuf) {
   static const char *names[] = {FOREACH_TOKENKIND(GENERATE_STRING)};
 
-  if(!tokenbuffer_expect(tokens, TOK_KEYWORD_INT, "int keyword")){
+  if (!tokenbuffer_expect(tokens, TOK_KEYWORD_INT, "int keyword")) {
     return NULL;
   }
   tokenbuffer_next(tokens);
 
-  if(!tokenbuffer_expect(tokens, TOK_IDENTIFIER, "identifier")){
+  if (!tokenbuffer_expect(tokens, TOK_IDENTIFIER, "identifier")) {
     return NULL;
   }
   Token identtok = tokenbuffer_peek(tokens);
@@ -505,10 +617,10 @@ AstFunDef *parse_fun(TokenBuffer *tokens, CharBuffer *charbuf){
   tokenbuffer_next(tokens);
 
   AstReturnStmt *retstmt = parse_return_stmt(tokens, charbuf);
-  if(!retstmt){
+  if (!retstmt) {
     return NULL;
   }
-  tokenbuffer_next(tokens);
+  //tokenbuffer_next(tokens);
 
   if (!tokenbuffer_expect(tokens, TOK_BRACE_CLOSE, "brace close }")) {
     free(retstmt);
@@ -521,8 +633,7 @@ AstFunDef *parse_fun(TokenBuffer *tokens, CharBuffer *charbuf){
   return fundef;
 }
 
-
-void gencode_expr(FILE *file, AstExpr *expr, CharBuffer *buffer){
+void gencode_expr(FILE *file, AstExpr *expr, CharBuffer *buffer) {
 
   switch (expr->kind) {
   case EXPR_CONST:
@@ -548,21 +659,22 @@ void gencode_expr(FILE *file, AstExpr *expr, CharBuffer *buffer){
   }
 }
 
-void gencode_retstmt(FILE *file, AstReturnStmt *retstmt, CharBuffer *buffer){
-  //fprintf(file, "movl $%d, %%eax\n", retstmt->intliteral);
+void gencode_retstmt(FILE *file, AstReturnStmt *retstmt, CharBuffer *buffer) {
+  // fprintf(file, "movl $%d, %%eax\n", retstmt->intliteral);
   gencode_expr(file, retstmt->expr, buffer);
   fprintf(file, "ret\n");
 }
 
 void gencode_fundef(FILE *file, AstFunDef *fundef, CharBuffer *buffer) {
-  fprintf(file, ".globl %.*s\n", fundef->name.len, buffer->data + fundef->name.start);
+  fprintf(file, ".globl %.*s\n", fundef->name.len,
+          buffer->data + fundef->name.start);
   fprintf(file, "%.*s:\n", fundef->name.len, buffer->data + fundef->name.start);
   gencode_retstmt(file, fundef->stmt, buffer);
 }
 
 int main(int argc, char *argv[]) {
 
-  if(argc != 2){
+  if (argc != 2) {
     fprintf(stderr, "wrong number of arguments. need a c file as input\n");
     exit(1);
   }
@@ -574,17 +686,17 @@ int main(int argc, char *argv[]) {
   int status = 0;
 
   status = tokenbuffer_create(&tokens, 100);
-  if(status < 0 ){
+  if (status < 0) {
     fprintf(stderr, "couldnt allocate token buffer\n");
   }
 
   status = charbuffer_create(&string, 100);
-  if(status < 0 ){
+  if (status < 0) {
     fprintf(stderr, "couldnt create char buffer\n");
   }
 
   status = lexbuf_create(&lexbuf, filename);
-  if(status < 0){
+  if (status < 0) {
     fprintf(stderr, "couldnt lex filename %s\n", filename);
   }
 
@@ -593,22 +705,24 @@ int main(int argc, char *argv[]) {
 
   AstFunDef *fundef = parse_fun(&tokens, &string);
 
+  print_fundef(fundef, &string, 0);
+
   FILE *genfile = fopen("myassembly.s", "w");
-  if(fundef){
+  if (fundef) {
     printf("succesfully parsed function \n");
     printf("name: %.*s \n", fundef->name.len, string.data + fundef->name.start);
-    //printf("return value %d\n", fundef->stmt->expr.);
+    // printf("return value %d\n", fundef->stmt->expr.);
     gencode_fundef(genfile, fundef, &string);
 
     char commandbuffer[250];
     int len = 1;
-    while(filename[len]) {
+    while (filename[len]) {
       if (filename[len] == '.') {
         break;
       }
       len++;
     }
-    //system(" gcc -m32 myassembly.s -o program ");
+    // system(" gcc -m32 myassembly.s -o program ");
   }
 
   fclose(genfile);
