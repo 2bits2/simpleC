@@ -570,7 +570,7 @@ AstReturnStmt *parse_return_stmt(TokenBuffer *tokens, CharBuffer *charbuf) {
 
   AstExpr *expr = parse_expr(tokens, charbuf);
   if (!expr) {
-    fprintf(stderr, "%d:%d: expected valid expression after return keyword",
+    fprintf(stderr, "%d:%d: expected valid expression after return keyword\n",
             ret.line, ret.col);
     return NULL;
   }
@@ -636,6 +636,33 @@ AstFunDef *parse_fun(TokenBuffer *tokens, CharBuffer *charbuf) {
 void gencode_expr(FILE *file, AstExpr *expr, CharBuffer *buffer) {
 
   switch (expr->kind) {
+  case EXPR_BINOP:
+    gencode_expr(file, expr->binop.left, buffer);
+    fprintf(file, "push %%eax\n");
+    gencode_expr(file, expr->binop.right, buffer);
+    fprintf(file, "mov %%eax, %%ecx\n");
+    fprintf(file, "pop %%eax\n");
+
+    switch (expr->binop.kind) {
+    case TOK_PLUS:
+      fprintf(file, "addl %%ecx, %%eax\n");
+      break;
+    case TOK_MINUS:
+      fprintf(file, "subl %%ecx, %%eax\n");
+      break;
+    case TOK_MUL:
+      fprintf(file, "imul %%ecx, %%eax\n");
+      break;
+    case TOK_DIV:
+      fprintf(file, "cdq\n");
+      fprintf(file, "idivl %%ecx, %%eax\n");
+      break;
+    default:
+      fprintf(stderr, "couldnt generate code for expression \n");
+      print_expr(expr, buffer, 0);
+    }
+
+    break;
   case EXPR_CONST:
     fprintf(file, "movl $%d, %%eax\n", expr->intliteral);
     break;
