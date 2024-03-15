@@ -20,6 +20,14 @@
   MACRO(TOK_PLUS)                                                              \
   MACRO(TOK_MUL)                                                               \
   MACRO(TOK_DIV)                                                               \
+  MACRO(TOK_LOGICAL_AND)                                                       \
+  MACRO(TOK_LOGICAL_OR)                                                        \
+  MACRO(TOK_LOGICAL_EQUAL)                                                     \
+  MACRO(TOK_LOGICAL_NOT_EQUAL)                                                 \
+  MACRO(TOK_LOGICAL_LESS)                                                      \
+  MACRO(TOK_LOGICAL_LESS_EQUAL)                                                \
+  MACRO(TOK_LOGICAL_GREATER)                                                   \
+  MACRO(TOK_LOGICAL_GREATER_EQUAL)                                             \
   MACRO(TOK_UNKNOWN)                                                           \
   MACRO(TOK_EOF)
 
@@ -241,9 +249,11 @@ void lex(TokenBuffer * const tokens, LexBuffer *lexer, CharBuffer *charbuf){
 
   int lastlen = 0;
 
-  while(1) {
+  while (1) {
     char c = lex_next(lexer);
-    if(!c){break;}
+    if (!c) {
+      break;
+    }
 
     switch (c) {
     case '\n':
@@ -263,6 +273,61 @@ void lex(TokenBuffer * const tokens, LexBuffer *lexer, CharBuffer *charbuf){
       tok.kind = TOK_BRACE_CLOSE;
       lastlen = 1;
       break;
+    case '=': {
+      tok.kind = TOK_UNKNOWN;
+      lastlen = 1;
+      char peek = lex_peek(lexer);
+      if (peek == '=') {
+        lex_next(lexer);
+        tok.kind = TOK_LOGICAL_EQUAL;
+        lastlen++;
+      }
+      break;
+    }
+    case '<': {
+      tok.kind = TOK_LOGICAL_LESS;
+      lastlen = 1;
+      char peek = lex_peek(lexer);
+      if(peek == '='){
+        lex_next(lexer);
+        tok.kind = TOK_LOGICAL_LESS_EQUAL;
+        lastlen++;
+      }
+      break;
+    }
+    case '&': {
+      tok.kind = TOK_UNKNOWN;
+      lastlen = 1;
+      char peek = lex_peek(lexer);
+      if (peek == '&') {
+        lex_next(lexer);
+        tok.kind = TOK_LOGICAL_AND;
+        lastlen++;
+      }
+      break;
+    }
+    case '|': {
+      tok.kind = TOK_UNKNOWN;
+      lastlen = 1;
+      char peek = lex_peek(lexer);
+      if (peek == '|') {
+        lex_next(lexer);
+        tok.kind = TOK_LOGICAL_OR;
+        lastlen++;
+      }
+      break;
+    }
+    case '>': {
+      tok.kind = TOK_LOGICAL_GREATER;
+      lastlen = 1;
+      char peek = lex_peek(lexer);
+      if(peek == '='){
+        lex_next(lexer);
+        tok.kind = TOK_LOGICAL_GREATER_EQUAL;
+        lastlen++;
+      }
+      break;
+    }
     case '+':
       tok.kind = TOK_PLUS;
       lastlen = 1;
@@ -287,10 +352,17 @@ void lex(TokenBuffer * const tokens, LexBuffer *lexer, CharBuffer *charbuf){
       tok.kind = TOK_SEMICOLON;
       lastlen = 1;
       break;
-    case '!':
+    case '!': {
       tok.kind = TOK_LOGICAL_NOT;
       lastlen = 1;
+      char peek = lex_peek(lexer);
+      if(peek == '='){
+        lex_next(lexer);
+        tok.kind = TOK_LOGICAL_NOT_EQUAL;
+        lastlen++;
+      }
       break;
+    }
     case '~':
       tok.kind = TOK_BITCOMPLEMENT;
       lastlen = 1;
@@ -455,7 +527,133 @@ int tokenbuffer_expect(TokenBuffer *tokens, TokenKind expected, const char *prin
   return 1;
 }
 
-AstExpr *parse_expr(TokenBuffer *tokens, CharBuffer *charbuf);
+
+
+
+
+AstExpr *parse_additive_expr(TokenBuffer *tokens, CharBuffer *charbuf);
+AstExpr *parse_relational_expr(TokenBuffer *tokens, CharBuffer *charbuf);
+AstExpr *parse_equality_expr(TokenBuffer *tokens, CharBuffer *charbuf);
+AstExpr *parse_logical_and_expr(TokenBuffer *tokens, CharBuffer *charbuf);
+AstExpr *parse_logical_or_expr(TokenBuffer *tokens, CharBuffer *charbuf);
+
+AstExpr *parse_logical_or_expr(TokenBuffer *tokens, CharBuffer *charbuf) {
+  AstExpr *leftExpr = parse_logical_and_expr(tokens, charbuf);
+  if (leftExpr == NULL) {
+    return NULL;
+  }
+
+  Token tok = tokenbuffer_peek(tokens);
+  while (tok.kind == TOK_LOGICAL_OR) {
+    tokenbuffer_next(tokens);
+    AstExpr *rightExpr = parse_logical_and_expr(tokens, charbuf);
+    if (rightExpr == NULL) {
+      fprintf(stderr, "%d:%d expected right expression after && \n", tok.line,
+              tok.col);
+      // TODO: free leftExpr
+      return NULL;
+    }
+    AstExpr *expr = malloc(sizeof(AstExpr));
+    expr->kind = EXPR_BINOP;
+    expr->binop.kind = tok.kind;
+    expr->binop.left = leftExpr;
+    expr->binop.right = rightExpr;
+    leftExpr = expr;
+
+    tok = tokenbuffer_peek(tokens);
+  }
+  return leftExpr;
+}
+
+AstExpr *parse_logical_and_expr(TokenBuffer *tokens, CharBuffer *charbuf) {
+  AstExpr *leftExpr = parse_equality_expr(tokens, charbuf);
+  if (leftExpr == NULL) {
+    return NULL;
+  }
+
+  Token tok = tokenbuffer_peek(tokens);
+  while (tok.kind == TOK_LOGICAL_AND) {
+    tokenbuffer_next(tokens);
+    AstExpr *rightExpr = parse_equality_expr(tokens, charbuf);
+    if (rightExpr == NULL) {
+      fprintf(stderr, "%d:%d expected right expression after && \n", tok.line,
+              tok.col);
+      // TODO: free leftExpr
+      return NULL;
+    }
+    AstExpr *expr = malloc(sizeof(AstExpr));
+    expr->kind = EXPR_BINOP;
+    expr->binop.kind = tok.kind;
+    expr->binop.left = leftExpr;
+    expr->binop.right = rightExpr;
+    leftExpr = expr;
+
+    tok = tokenbuffer_peek(tokens);
+  }
+  return leftExpr;
+}
+
+AstExpr *parse_equality_expr(TokenBuffer *tokens, CharBuffer *charbuf){
+  AstExpr *leftExpr = parse_relational_expr(tokens, charbuf);
+  if(leftExpr == NULL){
+    return NULL;
+  }
+
+  Token tok = tokenbuffer_peek(tokens);
+  while(tok.kind == TOK_LOGICAL_EQUAL || tok.kind == TOK_LOGICAL_NOT_EQUAL){
+    tokenbuffer_next(tokens);
+    AstExpr *rightExpr = parse_relational_expr(tokens, charbuf);
+    if(rightExpr == NULL){
+      fprintf(stderr, "%d:%d expected right expression after != or == \n", tok.line, tok.col);
+      // TODO: free leftExpr
+      return NULL;
+    }
+    AstExpr *expr = malloc(sizeof(AstExpr));
+    expr->kind = EXPR_BINOP;
+    expr->binop.kind = tok.kind;
+    expr->binop.left = leftExpr;
+    expr->binop.right = rightExpr;
+    leftExpr = expr;
+
+    tok = tokenbuffer_peek(tokens);
+  }
+
+  return leftExpr;
+}
+
+
+AstExpr *parse_relational_expr(TokenBuffer *tokens, CharBuffer *charbuf) {
+  AstExpr *leftAdditiveExpr = parse_additive_expr(tokens, charbuf);
+  if (leftAdditiveExpr == NULL) {
+    return NULL;
+  }
+
+  Token tok = tokenbuffer_peek(tokens);
+  while (tok.kind == TOK_LOGICAL_LESS || tok.kind == TOK_LOGICAL_LESS_EQUAL ||
+         tok.kind == TOK_LOGICAL_GREATER || tok.kind == TOK_LOGICAL_GREATER_EQUAL
+         ){
+
+    tokenbuffer_next(tokens);
+    AstExpr *rightAdditiveExpr = parse_additive_expr(tokens, charbuf);
+    if (rightAdditiveExpr == NULL) {
+      fprintf(stderr, "%d:%d expected right expression after < <= > or >= \n",
+              tok.line, tok.col);
+      // TODO: free leftAdditiveExpr
+      return NULL;
+    }
+
+    AstExpr *expr = malloc(sizeof(AstExpr));
+    expr->kind = EXPR_BINOP;
+    expr->binop.kind = tok.kind;
+    expr->binop.left = leftAdditiveExpr;
+    expr->binop.right = rightAdditiveExpr;
+    leftAdditiveExpr = expr;
+
+    tok = tokenbuffer_peek(tokens);
+  }
+
+  return leftAdditiveExpr;
+}
 
 AstExpr *parse_factor(TokenBuffer *tokens, CharBuffer *charbuf) {
   Token tok = tokenbuffer_peek(tokens);
@@ -481,16 +679,17 @@ AstExpr *parse_factor(TokenBuffer *tokens, CharBuffer *charbuf) {
   }
   case TOK_PAREN_OPEN: {
     tokenbuffer_next(tokens);
-    AstExpr *expr = parse_expr(tokens, charbuf);
+    AstExpr *expr = parse_logical_or_expr(tokens, charbuf);
     if(expr == NULL){
       fprintf(stderr, "%d:%d expected expression after (", tok.line, tok.col);
       return NULL;
     }
-    tok = tokenbuffer_next(tokens);
+    tok = tokenbuffer_peek(tokens);
     if(tok.kind != TOK_PAREN_CLOSE){
-      fprintf(stderr, "%d:%d expected closing paren ) after expression\n", tok.line, tok.col );
+      fprintf(stderr, "%d:%d expected closing paren ) after expression (code %d )\n", tok.line, tok.col, tok.kind );
       // TODO: free expr
     }
+    tokenbuffer_next(tokens);
     return expr;
     break;
   }
@@ -530,7 +729,7 @@ AstExpr *parse_term(TokenBuffer *tokens, CharBuffer *charbuf) {
   return leftFactor;
 }
 
-AstExpr *parse_expr(TokenBuffer *tokens, CharBuffer *charbuf) {
+AstExpr *parse_additive_expr(TokenBuffer *tokens, CharBuffer *charbuf) {
   AstExpr *leftTerm = parse_term(tokens, charbuf);
   if (leftTerm == NULL) {
     return leftTerm;
@@ -541,7 +740,7 @@ AstExpr *parse_expr(TokenBuffer *tokens, CharBuffer *charbuf) {
 
     AstExpr *rightTerm = parse_term(tokens, charbuf);
     if (rightTerm == NULL) {
-      fprintf(stderr, "%d:%d expected right factor after * or / \n", tok.line,
+      fprintf(stderr, "%d:%d expected right factor after + or - \n", tok.line,
               tok.col);
       // TODO: free rightTerm
       return NULL;
@@ -564,11 +763,9 @@ AstReturnStmt *parse_return_stmt(TokenBuffer *tokens, CharBuffer *charbuf) {
     return NULL;
   }
 
-  Token ret = tokenbuffer_peek(tokens);
+  Token ret = tokenbuffer_next(tokens);
 
-  tokenbuffer_next(tokens);
-
-  AstExpr *expr = parse_expr(tokens, charbuf);
+  AstExpr *expr = parse_logical_or_expr(tokens, charbuf);
   if (!expr) {
     fprintf(stderr, "%d:%d: expected valid expression after return keyword\n",
             ret.line, ret.col);
@@ -637,32 +834,168 @@ void gencode_expr(FILE *file, AstExpr *expr, CharBuffer *buffer) {
 
   switch (expr->kind) {
   case EXPR_BINOP:
-    gencode_expr(file, expr->binop.left, buffer);
-    fprintf(file, "push %%eax\n");
-    gencode_expr(file, expr->binop.right, buffer);
-    fprintf(file, "mov %%eax, %%ecx\n");
-    fprintf(file, "pop %%eax\n");
 
     switch (expr->binop.kind) {
+    case TOK_LOGICAL_OR: {
+      static int d = 0;
+
+      int label = d;
+      d++;
+
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "cmpl $0, %%eax\n");
+      fprintf(file, "je _logicalorcheck%d\n", label);
+      fprintf(file, "movl $1, %%eax\n");
+      fprintf(file, "jmp _logicalorend%d\n", label);
+
+      fprintf(file, "_logicalorcheck%d:\n", label);
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "cmpl $0, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "setne %%al\n");
+      fprintf(file, "_logicalorend%d:\n", label);
+      break;
+    }
+
+    case TOK_LOGICAL_AND: {
+      static int d = 0;
+      int label = d;
+      d++;
+
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "cmpl $0, %%eax\n");
+      fprintf(file, "jne _logicalandcheck%d\n", label);
+      fprintf(file, "jmp _logicalandend%d\n", label);
+
+      fprintf(file, "_logicalandcheck%d:\n", label);
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "cmpl $0, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "setne %%al\n");
+
+      fprintf(file, "_logicalandend%d:\n", label);
+
+    } break;
     case TOK_PLUS:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
       fprintf(file, "addl %%ecx, %%eax\n");
       break;
+
     case TOK_MINUS:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
       fprintf(file, "subl %%ecx, %%eax\n");
       break;
+
     case TOK_MUL:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
       fprintf(file, "imul %%ecx, %%eax\n");
       break;
+
     case TOK_DIV:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
       fprintf(file, "cdq\n");
       fprintf(file, "idivl %%ecx, %%eax\n");
       break;
+
+    case TOK_LOGICAL_EQUAL:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
+      fprintf(file, "cmpl %%ecx, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "sete %%al\n");
+      break;
+
+    case TOK_LOGICAL_NOT_EQUAL:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
+      fprintf(file, "cmpl %%ecx, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "setne %%al\n");
+      break;
+
+    case TOK_LOGICAL_GREATER_EQUAL:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
+      fprintf(file, "cmpl %%ecx, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "setge %%al\n");
+      break;
+
+    case TOK_LOGICAL_GREATER:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
+      fprintf(file, "cmpl %%ecx, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "setg %%al\n");
+      break;
+
+    case TOK_LOGICAL_LESS:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
+      fprintf(file, "cmpl %%ecx, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "setl %%al\n");
+      break;
+
+    case TOK_LOGICAL_LESS_EQUAL:
+      gencode_expr(file, expr->binop.left, buffer);
+      fprintf(file, "push %%eax\n");
+      gencode_expr(file, expr->binop.right, buffer);
+      fprintf(file, "mov %%eax, %%ecx\n");
+      fprintf(file, "pop %%eax\n");
+
+      fprintf(file, "cmpl %%ecx, %%eax\n");
+      fprintf(file, "movl $0, %%eax\n");
+      fprintf(file, "setle %%al\n");
+      break;
+
     default:
       fprintf(stderr, "couldnt generate code for expression \n");
       print_expr(expr, buffer, 0);
     }
-
     break;
+
+
   case EXPR_CONST:
     fprintf(file, "movl $%d, %%eax\n", expr->intliteral);
     break;

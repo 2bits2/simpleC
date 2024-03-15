@@ -1,3 +1,3 @@
 int main(){
-  return 8 / 2 * 3;
+  return  ( 3 + 3 == 6);
 }
