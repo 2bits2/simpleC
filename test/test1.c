@@ -1,3 +1,15 @@
+GENERATE_STRING(
 int main(){
-  return  ( 3 + 3 == 6);
+
+  int ho = 23;
+  char x = 3;
+
+
+  for(int i=0; i<20; i=i+1){
+    x = x + 1;
+  }
+
+
+  return ho * x;
 }
+)
