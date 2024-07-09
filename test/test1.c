@@ -1,15 +1,9 @@
-GENERATE_STRING(
+
 int main(){
-
-  int ho = 23;
-  char x = 3;
-
-
-  for(int i=0; i<20; i=i+1){
-    x = x + 1;
+  int factor = 4;
+  int result = 1;
+  for(int i=0; i<factor; i=i+1;){
+    result = result * (i+1);
   }
-
-
-  return ho * x;
+  return result;
 }
-)

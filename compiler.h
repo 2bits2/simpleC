@@ -1,3 +1,4 @@
+
 #ifndef MY_COMPILER_H
 #define MY_COMPILER_H
 
@@ -9,14 +10,17 @@
   MACRO(TOK_SEMICOLON)                                                         \
   MACRO(TOK_COLON)                                                             \
   MACRO(TOK_QUESTIONMARK)                                                      \
-  MACRO(TOK_KEYWORD_FOR)                                                       \
+  MACRO(TOK_KEYWORD_STRUCT)                                                    \
   MACRO(TOK_KEYWORD_BREAK)                                                     \
   MACRO(TOK_KEYWORD_IF)                                                        \
   MACRO(TOK_KEYWORD_ELSE)                                                      \
+  MACRO(TOK_KEYWORD_FOR)                                                       \
   MACRO(TOK_KEYWORD_INT)                                                       \
   MACRO(TOK_KEYWORD_CHAR)                                                      \
   MACRO(TOK_KEYWORD_RETURN)                                                    \
   MACRO(TOK_IDENTIFIER)                                                        \
+  MACRO(TOK_TYPE_IDENTIFIER)                                                   \
+  MACRO(TOK_NORMAL_IDENTIFIER)                                                 \
   MACRO(TOK_LITERAL_INT)                                                       \
   MACRO(TOK_MINUS)                                                             \
   MACRO(TOK_BITCOMPLEMENT)                                                     \
@@ -24,7 +28,9 @@
   MACRO(TOK_PLUS)                                                              \
   MACRO(TOK_MUL)                                                               \
   MACRO(TOK_DIV)                                                               \
+  MACRO(TOK_DOT)                                                               \
   MACRO(TOK_ASSIGN)                                                            \
+  MACRO(TOK_SINGLE_AMPERSAND)                                                  \
   MACRO(TOK_LOGICAL_AND)                                                       \
   MACRO(TOK_LOGICAL_OR)                                                        \
   MACRO(TOK_LOGICAL_EQUAL)                                                     \
@@ -33,6 +39,7 @@
   MACRO(TOK_LOGICAL_LESS_EQUAL)                                                \
   MACRO(TOK_LOGICAL_GREATER)                                                   \
   MACRO(TOK_LOGICAL_GREATER_EQUAL)                                             \
+  MACRO(TOK_COMMA)                                                             \
   MACRO(TOK_UNKNOWN)                                                           \
   MACRO(TOK_EOF)
 
@@ -43,13 +50,40 @@
   MACRO(EXPR_ASSIGN)                                                           \
   MACRO(EXPR_VAR)
 
-#define FOREACH_BLOCK_ITEM_KIND(MACRO)                                         \
-  MACRO(BLOCK_ITEM_RETURN)                                                     \
-  MACRO(BLOCK_ITEM_EXPR)                                                       \
-  MACRO(BLOCK_ITEM_FORLOOP)                                                    \
-  MACRO(BLOCK_ITEM_IFELSE)                                                     \
-  MACRO(BLOCK_ITEM_COMPOUND)                                                   \
-  MACRO(BLOCK_ITEM_DECL)
+#define FOREACH_BLOCK_ITEM_KIND(MACRO)          \
+  MACRO(BLOCK_ITEM_RETURN)                      \
+    MACRO(BLOCK_ITEM_EXPR)                      \
+    MACRO(BLOCK_ITEM_FORLOOP)                   \
+    MACRO(BLOCK_ITEM_IFELSE)                    \
+    MACRO(BLOCK_ITEM_COMPOUND)                  \
+    MACRO(BLOCK_ITEM_DECL)
+
+#define FOREACH_AST_KIND(MACRO)                                                \
+  MACRO(AST_LITERAL)                                                           \
+  MACRO(AST_STRUCT)                                                            \
+  MACRO(AST_DECL)                                                              \
+  MACRO(AST_MEMBER_ACCESS)                                                     \
+  MACRO(AST_VAR)                                                               \
+  MACRO(AST_PROGRAM)                                                           \
+  MACRO(AST_FUNC_PROTO)                                                        \
+  MACRO(AST_FUNC_DEF)                                                          \
+  MACRO(AST_FUNC_CALL)                                                         \
+  MACRO(AST_BLOCK)                                                             \
+  MACRO(AST_IF_ELSE)                                                           \
+  MACRO(AST_RETURN)                                                            \
+  MACRO(AST_BREAK)                                                             \
+  MACRO(AST_BINOP)                                                             \
+  MACRO(AST_UNOP)                                                              \
+  MACRO(AST_FORLOOP)                                                           \
+  MACRO(AST_ERROR)
+
+#define FOREACH_TYPE_KIND(MACRO)                                               \
+  MACRO(TYPE_UNRESOLVED)                                                       \
+  MACRO(TYPE_ERROR)                                                            \
+  MACRO(TYPE_INT)                                                              \
+  MACRO(TYPE_STRUCT)                                                           \
+  MACRO(TYPE_FUNC)                                                             \
+  MACRO(TYPE_CHAR)
 
 #define GENERATE_ENUM(ENUM) ENUM,
 #define GENERATE_STRING(STRING) #STRING,
@@ -57,181 +91,204 @@
 typedef enum { FOREACH_TOKENKIND(GENERATE_ENUM) } TokenKind;
 
 #include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
 
-typedef struct String {
-  char *data;
+#include "str.h"
+#include "lex.h"
+#include "ast.h"
+#include "table.h"
+#include "dep.h"
+
+
+typedef struct FileManager {
+  String *filenames;
+  String *content;
   unsigned len;
   unsigned cap;
-} String;
+} FileManager;
 
-int string_create(String *buf, unsigned cap);
-void string_destroy(String *buf);
-int string_push(String *buf, char c);
-unsigned string_size(String *buf);
+int    filemanager_init(FileManager *manager);
+void   filemanager_quit(FileManager *manager);
+int    filemanager_get_id(FileManager *manager, const String *filename);
+int    filemanager_load_file(FileManager *manager, const String *filename);
+String filemanager_get_content(FileManager *manager, int file_id);
+String filemanager_get_filename(FileManager *manager, int file_id);
 
-typedef struct {
-  FILE *file;
-  char peek;
-} CharPeekable;
 
-typedef struct {
-  unsigned start;
-  unsigned len;
-} StrSlice;
 
-typedef struct {
-  TokenKind kind;
-  unsigned line;
-  unsigned col;
+typedef struct Scope {
+  struct Scope *parent;
+  PtrBucket vars;
+} Scope;
+
+int   scope_init(Scope *scope);
+int   scope_quit(Scope *scope);
+void *scope_get(Scope *scope, uint64_t key);
+int   scope_put(Scope *scope, uint64_t key, void *data);
+
+
+typedef enum {
+  // parameters
+  // to functions
+  RDI,
+  RSI,
+  RDX,
+  RCX,
+  R8,
+  R9,
+  // preserved
+  RBX,
+  RSP,
+  RBP,
+  R12,
+  R13,
+  R14,
+  // return registers
+  RAX,
+} AssemblyRegisterType;
+
+typedef struct AssemblyVarInfo {
+  uint64_t name;
+  unsigned size;
+  bool isOnStack;
+  bool isValid;
   union {
-    int      literalint;
-    StrSlice string;
+    AssemblyRegisterType registerType;
+    int stackOffset;
   };
-} Token;
+} AssemblyVarInfo;
 
-
-typedef struct {
-  Token *data;
-  unsigned len;
-  unsigned cap;
-  unsigned i;
-} TokenPeekable;
-
-
-typedef struct Lexer {
-  TokenPeekable tokens;
-  String charbuf;
-} Lexer;
-
-
-int tokenpeekable_expect(TokenPeekable *tokens, TokenKind expected,
-                         const char *print);
-
-int tokenpeekable_print(TokenPeekable *buf, String *str);
-
-int  lex_init(Lexer *lexer);
-void lex_quit(Lexer *lexer);
-void lex_file(Lexer *lexer, FILE *file);
-
-typedef struct VarMapEntry {
-  int prev;
-  StrSlice view;
-  int stack_offset;
-  int scopelevel;
-} VarMapEntry;
-
-typedef struct VarMap {
-  VarMapEntry *data;
+typedef struct AssemblyVarTable {
+  AssemblyVarInfo *data;
   int cap;
   int len;
-} VarMap;
 
-int  varmap_scope_size(VarMap *map, int startId);
-int  varmap_init(VarMap *map);
-void varmap_quit(VarMap *map);
-int  varmap_new_id(VarMap *map);
-VarMapEntry *varmap_get(VarMap *map, int id);
-int  varmap_find_var(VarMap *map, int startId, StrSlice toFind, int varscope, String *charbuf);
-void varmap_print(VarMap *vars, String *buffer);
+} AssemblyVarTable;
 
-int  kind_size(TokenKind tok);
+int vartable_init(AssemblyVarTable *table);
+int vartable_quit(AssemblyVarTable *table);
+int vartable_checkpoint_get(AssemblyVarTable *table);
+int vartable_checkpoint_set(AssemblyVarTable *table, int checkpoint);
+int vartable_add(AssemblyVarTable *table, AssemblyVarInfo info);
+AssemblyVarInfo vartable_get(AssemblyVarTable *table, uint64_t name);
+AssemblyVarInfo vartable_last_on_stack(AssemblyVarTable *table);
 
+typedef struct Parser {
+  Lexer lexer;
+  StringInterner pool;
 
+  AstNode *root;
 
+  PtrBucket struct_definitions;
+  PtrBucket function_definitions;
 
-Token peekn(Lexer *lexer, unsigned ahead);
-Token peek(Lexer *lexer);
-Token next(Lexer *lexer);
+  // needed to order to calculate
+  // struct sizes out of order
+  DepGraph struct_dependencies;
 
-struct AstExpr;
+  // needed to resolve which variable name
+  // relates to what variable declaration
+  Scope scope;
 
-typedef struct AstAssign {
-  StrSlice name;
-  struct AstExpr *expr;
-} AstAssign;
+  // maps names to register names
+  // or stack value offsets for
+  // simple assembly code generation
+  AssemblyVarTable assembly_variables;
 
-typedef struct AstBinop {
-  TokenKind kind;
-  struct AstExpr *left;
-  struct AstExpr *right;
-} AstBinop;
+  bool hasErrors;
 
-typedef struct {
-  TokenKind kind;
-  struct AstExpr *expr;
-} AstUnOp;
+} Parser;
 
-typedef struct AstExpr {
-  enum { FOREACH_EXPR_KIND(GENERATE_ENUM) } kind;
-  union {
-    int intliteral;
-    AstUnOp unop;
-    AstBinop binop;
-    AstAssign assign;
-    StrSlice var;
-  };
-} AstExpr;
+int parser_init(Parser *parser);
+void parser_parse(Parser *parser, String content, int fileid,
+                  FileManager *manager);
+void parser_analyze(Parser *parser);
+void parser_print(Parser *parser);
+void parser_dump_assembly(Parser *parser, FILE *file);
+void parser_quit(Parser *parser);
 
-typedef struct AstDeclare {
-  Token kind;
-  StrSlice name;
-  AstExpr *option;
-} AstDeclare;
+String parser_token_content(Parser *parser, Token tok);
+String parser_token_filename(Parser *parser, Token tok);
+int parser_analyze_types(Parser *parser);
 
-typedef struct AstIfElse {
-  AstExpr *condition;
-  struct AstBlockItem *truestmt;
-  struct AstBlockItem *elsestmt;
-} AstIfElse;
+int size_of_type(Parser *parser, Token kind);
+int offset_align(int offset, int multiple);
+int var_member_offset(Parser *parser, AstNode *node, int *last_member_size);
 
-typedef struct {
-  struct AstBlockItem *data;
-  int len;
-  int cap;
-} AstBlockItemList;
+// Regular text
+#define BLK "\e[0;30m"
+#define RED "\e[0;31m"
+#define GRN "\e[0;32m"
+#define YEL "\e[0;33m"
+#define BLU "\e[0;34m"
+#define MAG "\e[0;35m"
+#define CYN "\e[0;36m"
+#define WHT "\e[0;37m"
 
-typedef struct AstCompound {
-  AstBlockItemList blockitems;
-} AstCompound;
+//Regular bold text
+#define BBLK "\e[1;30m"
+#define BRED "\e[1;31m"
+#define BGRN "\e[1;32m"
+#define BYEL "\e[1;33m"
+#define BBLU "\e[1;34m"
+#define BMAG "\e[1;35m"
+#define BCYN "\e[1;36m"
+#define BWHT "\e[1;37m"
 
-typedef struct AstForLoop {
-  struct AstBlockItem *init;
-  AstExpr *condition;
-  AstExpr *postExpr;
-  struct AstBlockItem *body;
-} AstForLoop;
+//Regular underline text
+#define UBLK "\e[4;30m"
+#define URED "\e[4;31m"
+#define UGRN "\e[4;32m"
+#define UYEL "\e[4;33m"
+#define UBLU "\e[4;34m"
+#define UMAG "\e[4;35m"
+#define UCYN "\e[4;36m"
+#define UWHT "\e[4;37m"
 
-typedef struct AstBlockItem {
-  enum { FOREACH_BLOCK_ITEM_KIND(GENERATE_ENUM) } kind;
-  union {
-    AstExpr *expr;
-    AstDeclare decl;
-    struct AstIfElse ifelse;
-    AstCompound compound;
-    AstForLoop forloop;
-  };
-} AstBlockItem;
+//Regular background
+#define BLKB "\e[40m"
+#define REDB "\e[41m"
+#define GRNB "\e[42m"
+#define YELB "\e[43m"
+#define BLUB "\e[44m"
+#define MAGB "\e[45m"
+#define CYNB "\e[46m"
+#define WHTB "\e[47m"
 
-typedef struct {
-  StrSlice name;
-  AstBlockItemList stmts;
-} AstFunDef;
+//High intensty background
+#define BLKHB "\e[0;100m"
+#define REDHB "\e[0;101m"
+#define GRNHB "\e[0;102m"
+#define YELHB "\e[0;103m"
+#define BLUHB "\e[0;104m"
+#define MAGHB "\e[0;105m"
+#define CYNHB "\e[0;106m"
+#define WHTHB "\e[0;107m"
 
-typedef struct {
-  String charbuf;
-  AstFunDef *fundef;
-} Ast;
+//High intensty text
+#define HBLK "\e[0;90m"
+#define HRED "\e[0;91m"
+#define HGRN "\e[0;92m"
+#define HYEL "\e[0;93m"
+#define HBLU "\e[0;94m"
+#define HMAG "\e[0;95m"
+#define HCYN "\e[0;96m"
+#define HWHT "\e[0;97m"
 
-Ast *parse_file(FILE *file);
+//Bold high intensity text
+#define BHBLK "\e[1;90m"
+#define BHRED "\e[1;91m"
+#define BHGRN "\e[1;92m"
+#define BHYEL "\e[1;93m"
+#define BHBLU "\e[1;94m"
+#define BHMAG "\e[1;95m"
+#define BHCYN "\e[1;96m"
+#define BHWHT "\e[1;97m"
 
-void gencode_file(FILE *file, Ast *ast, VarMap *vars, int lastVarId,
-                  int scopelevel);
-
-void print_expr(AstExpr *expr, String *buffer, int indent);
-void print_fundef(AstFunDef *fundef, String *buffer, int indent);
-
-void free_expr(AstExpr *expr);
-void free_stmt(AstBlockItem *stmt);
-void free_stmt_list(AstBlockItemList list);
+//Reset
+#define reset "\e[0m"
+#define CRESET "\e[0m"
+#define COLOR_RESET "\e[0m"
 
 #endif

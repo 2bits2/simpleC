@@ -1,124 +1,65 @@
 #include "compiler.h"
 #include <ctype.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-int tokenpeekable_print(TokenPeekable *buf, String *str);
-int tokenpeekable_create(TokenPeekable *buf, unsigned cap);
-Token tokenpeekable_peek(TokenPeekable *buf);
-Token tokenpeekable_next(TokenPeekable *buf);
-void tokenpeekable_destroy(TokenPeekable *buf);
-int tokenpeekable_push(TokenPeekable *buf, Token tok);
-
-int charpeekable_create(CharPeekable *const lexbuf, const char *filename);
-int charpeekable_destroy(CharPeekable *lexbuf);
-
-int string_create(String *buf, unsigned cap){
-  buf->len = 0;
-  buf->cap = cap;
-  buf->data = malloc(sizeof(char) * buf->cap);
-  if(!buf->data){
+/////////// tokens //////////////////////////////////////
+int tokens_init(TokenArray *arr) {
+  arr->len = 0;
+  arr->cap = 64;
+  arr->data = malloc(sizeof(*arr->data) * arr->cap);
+  if (!arr->data) {
+    fprintf(stderr, "couldn't initialize token array with cap %d\n", arr->cap);
     return -1;
   }
   return 0;
 }
 
-void string_destroy(String *buf){
-  free(buf->data);
-  buf->len = 0;
-  buf->cap = 0;
-}
-
-int string_push(String *buf, char c){
-  if(buf->len >= buf->cap){
-    unsigned newcap = buf->cap * 2;
-    char *newdata = realloc(buf->data, newcap);
-    if(!newdata){
-      fprintf(stderr, "couldnt realloc charbuffer \n");
-      return -1;
-    }
-    buf->data = newdata;
-    buf->cap = newcap;
+String token_string(FileManager *manager, Token tok){
+  String result = filemanager_get_content(manager, tok.file_id);
+  if(result.data){
+    result = str_from_slice(result, tok.string);
   }
-  buf->data[buf->len++] = c;
-  return 0;
+  return result;
 }
 
-unsigned string_size(String *buf){
-  return buf->len;
+void token_print(FileManager *manager, Token tok, FILE *file){
+  static const char *kind_names[] = { FOREACH_TOKENKIND(GENERATE_STRING)};
+  String content = token_string(manager, tok);
+  String filename = filemanager_get_filename(manager, tok.file_id);
+  fprintf(file, "%.*s:%d:%d: %.*s ->  %s",
+          filename.len, filename.data,
+          tok.line, tok.col,
+          content.len, content.data,
+          kind_names[tok.kind]
+          );
 }
 
 
-int tokenpeekable_print(TokenPeekable *buf, String *str){
+int tokens_print(TokenArray *buf, String str){
   static const char *names[] = {FOREACH_TOKENKIND(GENERATE_STRING)};
-
   for(int i=0; i<buf->len; i++){
     Token tok = buf->data[i];
-
     printf("%d:%d  %s  ", tok.line, tok.col, names[tok.kind]);
-
-    if(tok.kind == TOK_IDENTIFIER){
-      printf(" -> %.*s ", tok.string.len, str->data + tok.string.start);
-    }
+    printf(" -> %.*s ", tok.string.len, str.data + tok.string.start);
     printf("\n");
   }
 
   return 0;
 }
 
-
-int tokenpeekable_create(TokenPeekable *buf, unsigned cap){
-  buf->i = 0;
-  buf->len = 0;
-  buf->cap = cap;
-  buf->data = malloc(sizeof(Token) * buf->cap);
-  if(!buf->data){
-    return -1;
+int tokens_internalize(TokenArray *tokens, String content,
+                       StringInterner *interner){
+  for(int i=0; i<tokens->len; i++){
+    String original = str_from_slice(content, tokens->data[i].string);
+    tokens->data[i].string = str_interner_put(interner, original);
   }
   return 0;
 }
 
-Token tokenpeekable_peekn(TokenPeekable *buf, unsigned i) {
-  if (buf->i + i >= buf->len) {
-    Token result = {.kind = TOK_EOF};
-    return result;
-  }
-  return buf->data[buf->i + i];
-}
-
-Token tokenpeekable_peek(TokenPeekable *buf){
-  if(buf->i >= buf->len){
-    Token result = {
-      .kind = TOK_EOF
-    };
-    return result;
-  }
-  return buf->data[buf->i];
-}
-
-
-
-
-
-
-Token tokenpeekable_next(TokenPeekable *buf){
-  Token tok = tokenpeekable_peek(buf);
-  if(tok.kind == TOK_EOF){
-    return tok;
-  }
-  buf->i += 1;
-  return tok;
-}
-
-
-
-void tokenpeekable_destroy(TokenPeekable *buf){
-  free(buf->data);
-  buf->cap = 0;
-  buf->len = 0;
-}
-
-int tokenpeekable_push(TokenPeekable *buf, Token tok){
+int tokens_push(TokenArray *buf, Token tok){
   if(buf->len >= buf->cap){
     unsigned newcap = buf->cap * 2;
     Token *newdata = realloc(buf->data, sizeof(Token) * newcap);
@@ -134,186 +75,191 @@ int tokenpeekable_push(TokenPeekable *buf, Token tok){
   return 0;
 }
 
-int charpeekable_create(CharPeekable *const charpeekable, const char *filename){
-  FILE *file = fopen(filename, "r");
-  if(!file){
-    fprintf(stderr, "couldnt open file %s for lexing \n", filename);
-    return -1;
-  }
-
-  charpeekable->file = file;
-  charpeekable->peek = 0;
+int tokens_quit(TokenArray *arr){
+  free(arr->data);
+  arr->cap = 0;
+  arr->len = 0;
   return 0;
 }
 
-
-int charpeekable_destroy(CharPeekable *charpeekable){
-  fclose(charpeekable->file);
-  charpeekable->peek = 0;
-  return 0;
+Lexer tokens_to_lexer(TokenArray arr){
+  Lexer result =  {.tokens = arr, .i=0 };
+  return result;
 }
 
 
-char lex_next(CharPeekable * const charpeekable){
-  if(charpeekable->peek){
-    char c = charpeekable->peek;
-    charpeekable->peek = 0;
-    return c;
-  }
-  char c = fgetc(charpeekable->file);
-  if(c == EOF){return 0;}
-  return c;
-}
-
-char lex_peek(CharPeekable *const charpeekable){
-  if(charpeekable->peek){
-    return charpeekable->peek;
-  }
-  charpeekable->peek = lex_next(charpeekable);
-  return charpeekable->peek;
-}
-
-
-
-
-
-
-void lex(Lexer *lexer, CharPeekable *charpeekable){
-
-  Token tok = {.col = 0, .line=1};
-
-  int lastlen = 0;
-
-  while (1) {
-    char c = lex_next(charpeekable);
-    if (!c) {
-      break;
-    }
-
+int tokens_add_from_string(TokenArray *tokens, String content, int fileid){
+  Token tok = {.col = 0, .line = 1};
+  int lastlinepos = 0;
+  for (int i = 0; i < content.len; i++) {
+    char c = content.data[i];
     switch (c) {
     case '\n':
-      tok.col = 0;
       tok.line++;
-      lastlen = 0;
+      tok.col = 0;
+      lastlinepos = i;
       continue;
     case ' ':
       tok.col++;
-      lastlen = 0;
       continue;
     case '{':
       tok.kind = TOK_BRACE_OPEN;
-      lastlen = 1;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
       break;
     case '}':
       tok.kind = TOK_BRACE_CLOSE;
-      lastlen = 1;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
       break;
-    case '=': {
-      tok.kind = TOK_ASSIGN;
-      lastlen = 1;
-      char peek = lex_peek(charpeekable);
-      if (peek == '=') {
-        lex_next(charpeekable);
-        tok.kind = TOK_LOGICAL_EQUAL;
-        lastlen++;
-      }
+
+    case '.':
+      tok.kind = TOK_DOT;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
       break;
-    }
-    case '<': {
-      tok.kind = TOK_LOGICAL_LESS;
-      lastlen = 1;
-      char peek = lex_peek(charpeekable);
-      if(peek == '='){
-        lex_next(charpeekable);
-        tok.kind = TOK_LOGICAL_LESS_EQUAL;
-        lastlen++;
-      }
-      break;
-    }
-    case '&': {
-      tok.kind = TOK_UNKNOWN;
-      lastlen = 1;
-      char peek = lex_peek(charpeekable);
-      if (peek == '&') {
-        lex_next(charpeekable);
-        tok.kind = TOK_LOGICAL_AND;
-        lastlen++;
-      }
-      break;
-    }
-    case '|': {
-      tok.kind = TOK_UNKNOWN;
-      lastlen = 1;
-      char peek = lex_peek(charpeekable);
-      if (peek == '|') {
-        lex_next(charpeekable);
-        tok.kind = TOK_LOGICAL_OR;
-        lastlen++;
-      }
-      break;
-    }
-    case '>': {
-      tok.kind = TOK_LOGICAL_GREATER;
-      lastlen = 1;
-      char peek = lex_peek(charpeekable);
-      if(peek == '='){
-        lex_next(charpeekable);
-        tok.kind = TOK_LOGICAL_GREATER_EQUAL;
-        lastlen++;
-      }
-      break;
-    }
-    case '+':
-      tok.kind = TOK_PLUS;
-      lastlen = 1;
-      break;
-    case '*':
-      tok.kind = TOK_MUL;
-      lastlen = 1;
-      break;
-    case '/':
-      tok.kind = TOK_DIV;
-      lastlen = 1;
-      break;
+
     case '(':
       tok.kind = TOK_PAREN_OPEN;
-      lastlen = 1;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
       break;
+
     case ')':
       tok.kind = TOK_PAREN_CLOSE;
-      lastlen = 1;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
+      break;
+
+    case ',':
+      tok.kind = TOK_COMMA;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
+      break;
+
+    case '&':
+      tok.kind = TOK_SINGLE_AMPERSAND;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
+      break;
+
+    case '/':
+      tok.kind = TOK_DIV;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
+      break;
+
+    case '-':
+      tok.kind = TOK_MINUS;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
+      break;
+
+    case '+':
+      tok.kind = TOK_PLUS;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
+      break;
+
+    case '*':
+      tok.kind = TOK_MUL;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
+      break;
+
+    case '>':
+      tok.kind = TOK_LOGICAL_GREATER;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+
+      if(i+1 < content.len){
+        if(content.data[i+1] == '='){
+          tok.kind = TOK_LOGICAL_GREATER_EQUAL;
+          tok.string.len++;
+        }
+      }
+      tokens_push(tokens, tok);
+      i += tok.string.len - 1;
+      break;
+
+    case '<':
+      tok.kind = TOK_LOGICAL_LESS;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+
+      if (i + 1 < content.len) {
+        if (content.data[i + 1] == '=') {
+          tok.kind = TOK_LOGICAL_LESS_EQUAL;
+          tok.string.len = 2;
+        }
+      }
+      tokens_push(tokens, tok);
+      i += tok.string.len - 1;
+      break;
+
+    case '=':
+      tok.kind = TOK_ASSIGN;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+
+      if (i + 1 < content.len) {
+        if (content.data[i + 1] == '=') {
+          tok.kind = TOK_LOGICAL_EQUAL;
+          tok.string.len++;
+        }
+      }
+
+      tokens_push(tokens, tok);
+      i += tok.string.len - 1;
       break;
     case ';':
       tok.kind = TOK_SEMICOLON;
-      lastlen = 1;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
+      tok.string.len = 1;
+      tokens_push(tokens, tok);
       break;
-    case ':':
-      tok.kind = TOK_COLON;
-      lastlen = 1;
-      break;
-    case '!': {
-      tok.kind = TOK_LOGICAL_NOT;
-      lastlen = 1;
-      char peek = lex_peek(charpeekable);
-      if(peek == '='){
-        lex_next(charpeekable);
-        tok.kind = TOK_LOGICAL_NOT_EQUAL;
-        lastlen++;
-      }
-      break;
-    }
-    case '~':
-      tok.kind = TOK_BITCOMPLEMENT;
-      lastlen = 1;
-      break;
-    case '-':
-      tok.kind = TOK_MINUS;
-      lastlen = 1;
-      break;
-    case '?':
-      tok.kind = TOK_QUESTIONMARK;
-      lastlen = 1;
-      break;
+
     case '0':
     case '1':
     case '2':
@@ -324,143 +270,113 @@ void lex(Lexer *lexer, CharPeekable *charpeekable){
     case '7':
     case '8':
     case '9': {
-
-      int result = c - '0';
+      tok.kind = TOK_LITERAL_INT;
+      tok.file_id = fileid;
+      tok.col = i - lastlinepos;
+      tok.string.start = i;
       int len = 1;
-      while(1){
-        char peek = lex_peek(charpeekable);
-        if(!isdigit(peek)){
-          break;
-        }
-        lex_next(charpeekable);
+      while (i + len < content.len &&
+             isdigit(content.data[i + len])) {
         len++;
-        result *= 10;
-        result += peek - '0';
       }
+      tok.string.len = len;
+      tokens_push(tokens, tok);
+      i += len - 1;
+    } break;
 
-      tok.kind       = TOK_LITERAL_INT;
-      tok.literalint = result;
-      lastlen = len;
-      break;
-    }
-
-    default:
-
-      if(isalpha(c)){
-        StrSlice slice = {};
-        slice.start = string_size(&lexer->charbuf);
-        slice.len = 1;
-        string_push(&lexer->charbuf, c);
-
-        while(1){
-          char peek = lex_peek(charpeekable);
-          if(!isalnum(peek)){
-            break;
-          }
-          lex_next(charpeekable);
-          slice.len++;
-          string_push(&lexer->charbuf, peek);
+    default: {
+      if (isalpha(c)) {
+        int len = 1;
+        while (i + len < content.len &&
+               isalnum(content.data[i + len])) {
+          len++;
         }
-
-
         tok.kind = TOK_IDENTIFIER;
-        tok.string = slice;
-        lastlen = slice.len;
+        tok.file_id = fileid;
+        tok.col = i - lastlinepos;
+        tok.string.start = i;
+        tok.string.len = len;
 
-        if(slice.len == 3){
-          if(memcmp(lexer->charbuf.data + slice.start, "int", 3) == 0){
-            lexer->charbuf.len = slice.start;
+        if(tok.string.len == 2){
+          if(strncmp(content.data + tok.string.start, "if", 2) == 0){
+            tok.kind = TOK_KEYWORD_IF;
+          }
+        }
+        else if(tok.string.len == 3){
+          if(strncmp(content.data + tok.string.start, "int", 3) == 0){
             tok.kind = TOK_KEYWORD_INT;
-          } else if(memcmp(lexer->charbuf.data + slice.start, "for", 3) == 0){
-            lexer->charbuf.len = slice.start;
+          } else if(strncmp(content.data + tok.string.start, "for", 3) == 0){
             tok.kind = TOK_KEYWORD_FOR;
           }
-        }
-        else if(slice.len == 4){
-          if (memcmp(lexer->charbuf.data + slice.start, "char", 4) == 0) {
-            lexer->charbuf.len = slice.start;
+        } else if(tok.string.len == 4) {
+          if (strncmp(content.data + tok.string.start, "else", 4) == 0) {
+            tok.kind = TOK_KEYWORD_ELSE;
+          }
+          else if(strncmp(content.data + tok.string.start, "char", 4) == 0){
             tok.kind = TOK_KEYWORD_CHAR;
           }
-        }
-        else if(slice.len == 5){
-          if(memcmp(lexer->charbuf.data + slice.start, "break", 5) == 0){
-            lexer->charbuf.len = slice.start;
-            tok.kind = TOK_KEYWORD_FOR;
+        } else if(tok.string.len == 5){
+          if (strncmp(content.data + tok.string.start, "break", 5) == 0) {
+            tok.kind = TOK_KEYWORD_BREAK;
           }
         }
-        else if(slice.len == 6 && memcmp(lexer->charbuf.data + slice.start, "return", 6) == 0){
-          lexer->charbuf.len = slice.start;
-          tok.kind = TOK_KEYWORD_RETURN;
-        } else if(slice.len == 2 && memcmp(lexer->charbuf.data + slice.start, "if", 2) == 0){
-          lexer->charbuf.len = slice.start;
-          tok.kind = TOK_KEYWORD_IF;
-        } else if(slice.len == 4 && memcmp(lexer->charbuf.data + slice.start, "else", 4) == 0){
-          lexer->charbuf.len = slice.start;
-          tok.kind = TOK_KEYWORD_ELSE;
+        else if(tok.string.len == 6){
+          if(strncmp(content.data + tok.string.start, "struct", 6) == 0) {
+            tok.kind = TOK_KEYWORD_STRUCT;
+          } else if(strncmp(content.data + tok.string.start, "return", 6) == 0){
+            tok.kind = TOK_KEYWORD_RETURN;
+          }
         }
-
-
-
+        tokens_push(tokens, tok);
+        i += len-1;
       } else {
         tok.kind = TOK_UNKNOWN;
-        lastlen = 1;
+        tok.file_id = fileid;
+        tok.col = i - lastlinepos;
+        tok.string.start = i;
+        tok.string.len = 1;
+        tokens_push(tokens, tok);
       }
     }
-
-    tokenpeekable_push(&lexer->tokens, tok);
-    tok.col += lastlen;
-  }
-}
-
-Token peek(Lexer *lexer) {
-  return tokenpeekable_peek(&lexer->tokens);
-}
-
-
-Token peekn(Lexer *lexer, unsigned i){
-  return tokenpeekable_peekn(&lexer->tokens, i);
-}
-
-Token next(Lexer *lexer) { return tokenpeekable_next(&lexer->tokens); }
-
-
-void lex_file(Lexer *lexer, FILE *file) {
-  CharPeekable charpeekable = {.file = file, .peek = 0};
-  lex(lexer, &charpeekable);
-}
-
-int lex_init(Lexer *lexer) {
-  int status = 0;
-  status = tokenpeekable_create(&lexer->tokens, 100);
-  if (status < 0) {
-    fprintf(stderr, "couldnt allocate token buffer\n");
-    return status;
-  }
-  status = string_create(&lexer->charbuf, 100);
-  if (status < 0) {
-    fprintf(stderr, "couldnt create char buffer\n");
-    return status;
+    }
   }
   return 0;
 }
 
-void lex_quit(Lexer *lexer){
-  string_destroy(&lexer->charbuf);
-  tokenpeekable_destroy(&lexer->tokens);
+///////////////// lexer ////////////////////////////////
+int lex_init(Lexer *lexer) {
+  lexer->i = 0;
+  return tokens_init(&lexer->tokens);
 }
 
-int tokenpeekable_expect(TokenPeekable *tokens, TokenKind expected, const char *print){
-  static const char *names[] = {FOREACH_TOKENKIND(GENERATE_STRING)};
-  Token tok = tokenpeekable_peek(tokens);
-  if(tok.kind != expected){
-    if(print){
-      fprintf(
-              stderr,
-              "%d:%d expected %s but found tokenkind %s "
-              "instead.\n",
-              tok.line, tok.col, print, names[tok.kind]);
-    }
-    return 0;
+int lex(Lexer *lexer, String input, int fileid){
+  return tokens_add_from_string(&lexer->tokens, input, fileid);
+}
+
+Token lex_peek(Lexer *lexer) { return lex_peekn(lexer, 0); }
+
+Token lex_peekn(Lexer *lexer, unsigned ahead) {
+  Token tok = {.kind = TOK_EOF};
+  if (lexer->i + ahead >= lexer->tokens.len) {
+    return tok;
   }
-  return 1;
+  return lexer->tokens.data[lexer->i + ahead];
+}
+
+Token lex_next(Lexer *lexer) {
+  lexer->i++;
+  return lex_peek(lexer);
+}
+
+int lex_checkpoint(Lexer *lexer) { return lexer->i; }
+
+int lex_restore(Lexer *lexer, int checkpoint) {
+  int move = lexer->i - checkpoint;
+  lexer->i = checkpoint;
+  return move;
+}
+
+int lex_quit(Lexer *lexer) {
+  lexer->i = 0;
+  return tokens_quit(&lexer->tokens);
 }

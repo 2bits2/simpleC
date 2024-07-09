@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -5,79 +6,70 @@
 #include <string.h>
 #include "compiler.h"
 
-const char *test1 = {
-          #include "test/test1.c"
-};
-
-int kind_size(TokenKind kind){
-  switch (kind) {
-  case TOK_KEYWORD_CHAR: return 1;
-  case TOK_KEYWORD_INT:  return 4;
-  default:
-    return 0;
+int offset_align(int offset, int multiple) {
+  if (offset % multiple == 0) {
+    return offset;
   }
+  return ((offset / multiple) + 1) * multiple;
 }
 
-
-int compile(FILE *file) {
-  int status = 0;
-  Ast *ast = parse_file(file);
-
-  FILE *genfile = fopen("myassembly.s", "w");
-  if (ast->fundef) {
-    printf("succesfully parsed function ");
-    printf("name: %.*s \n", ast->fundef->name.len,
-           ast->charbuf.data + ast->fundef->name.start);
-
-    print_fundef(ast->fundef, &ast->charbuf, 0);
-
-    VarMap vars = {};
-    varmap_init(&vars);
-
-    gencode_file(genfile, ast, &vars, -1, 0);
-
-    varmap_print(&vars, &ast->charbuf);
-    varmap_quit(&vars);
-
+int natural_alignment_size(int *offsets, int startoffset, int *sizes, int len) {
+  for (int i = 0; i < len; i++) {
+    int size = sizes[i];
+    startoffset = offset_align(startoffset, size);
+    offsets[i] = startoffset;
+    startoffset += size;
   }
-  fclose(genfile);
-
-  if(ast->fundef == NULL){
-    return -1;
-  }
-
-  return 0;
+  return startoffset;
 }
-
-int test(const char *input){
-  FILE *t1 = fmemopen((void*)input, strlen(input), "r");
-  int status = compile(t1);
-  fclose(t1);
-  return status;
-}
-
-
-
-
-
-
-
 
 
 int main(int argc, char *argv[]) {
-  test(test1);
 
+  int status = 0;
 
-  /* if (argc != 2) { */
-  /*   fprintf(stderr, "wrong number of arguments. need a c file as input\n"); */
-  /*   exit(1); */
-  /* } */
-  /* const char *filename = argv[1]; */
-  /* FILE *file = fopen(filename, "r"); */
-  /* if (!file) { */
-  /*   fprintf(stderr, "couldnt open file %s for lexing \n", filename); */
-  /*   exit(1); */
-  /* } */
-  /* compile(file); */
-  /* fclose(file); */
+  if (argc != 2) {
+    fprintf(stderr, "wrong number of arguments. need a c file as input\n");
+    exit(1);
+  }
+
+  FileManager files;
+  status = filemanager_init(&files);
+  if (status < 0) {
+    fprintf(stderr, "couldn't initialize file manager\n");
+    return status;
+  }
+
+  Parser parser;
+  parser_init(&parser);
+
+  String input_file_name    = {
+    .data = argv[1],
+    .cap = 0,
+    .len = strlen(argv[1])
+  };
+
+  int    input_file_id      = filemanager_load_file(&files, &input_file_name);
+  String input_file_content = filemanager_get_content(&files, input_file_id);
+  char   *filename = "myassembly.s";
+  String out_file_name = {.data= filename, .cap = 0, .len=strlen(filename)};
+
+  parser_parse(&parser, input_file_content, input_file_id, &files);
+  parser_dump_assembly(&parser, stdout);
+
+  FILE *file = fopen(filename, "w");
+  if(!file){
+    fprintf(stderr, "couldnt open %s for writing\n", filename);
+    exit(2);
+  }
+
+  parser_dump_assembly(&parser, file);
+  fclose(file);
+  filemanager_quit(&files);
+
+  StrSlice t = {.len = 3, .start = 20};
+  uint64_t result = str_slice_to_uint64(t);
+  StrSlice s = str_slice_from_uint64(result);
+
+  return 0;
 }
